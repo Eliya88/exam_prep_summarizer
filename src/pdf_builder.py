@@ -1,0 +1,335 @@
+"""Renders a list of Markdown sections into one styled, right-to-left
+Hebrew PDF with a handwritten look (Playpen Sans Hebrew).
+
+Uses fpdf2 + uharfbuzz for real Hebrew text shaping and bidi reordering
+(mixed Hebrew/English lines render correctly). Pure pip install, no GTK/
+Pango system dependency, so it stays easy to set up on Windows.
+
+This intentionally does NOT go through an HTML layer: fpdf2's write_html()
+does not document reliable RTL support, so headings/paragraphs/bullets are
+parsed directly from the Markdown and drawn with fpdf2 primitives, using
+its built-in `markdown=True` cell option to bold `**text**` spans.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import List
+
+from fpdf import FPDF
+from fpdf.enums import MethodReturnValue
+
+FONT_FAMILY = "PlaypenHebrew"
+FONT_PATH = Path(__file__).parent.parent / "assets" / "fonts" / "PlaypenSansHebrew.ttf"
+
+INK_COLOR = (43, 38, 38)          # body text - warm near-black
+HEADING_COLOR = (172, 74, 39)     # burnt-orange marker color for headings
+RULE_COLOR = (222, 210, 195)      # faint notebook rule lines
+PAGE_BG = (255, 253, 247)         # warm off-white "paper"
+BACK_COVER_BG = (249, 238, 187)   # slightly yellow notebook-cover tone
+BACK_COVER_RULE_COLOR = (214, 195, 140)  # rule lines a touch darker, to show against the yellow
+
+
+class NotebookPDF(FPDF):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.page_bg = PAGE_BG
+        self.rule_color = RULE_COLOR
+        self.page_dirty = False  # has anything been written on the current page yet?
+
+    def add_page(self, *args, **kwargs) -> None:
+        super().add_page(*args, **kwargs)
+        self.page_dirty = False
+
+    def header(self) -> None:
+        self.set_fill_color(*self.page_bg)
+        self.rect(0, 0, self.w, self.h, style="F")
+        # Faint horizontal ruled lines, like notebook paper.
+        self.set_draw_color(*self.rule_color)
+        self.set_line_width(0.2)
+        y = 25
+        while y < self.h - 15:
+            self.line(12, y, self.w - 12, y)
+            y += 8
+
+    def footer(self) -> None:
+        self.set_y(-12)
+        self.set_font(FONT_FAMILY, size=9)
+        self.set_text_color(*RULE_COLOR)
+        self.cell(0, 8, str(self.page_no()), align="C")
+
+
+def _register_font(pdf: FPDF) -> None:
+    pdf.add_font(FONT_FAMILY, style="", fname=str(FONT_PATH), variations={"wght": 420})
+    pdf.add_font(FONT_FAMILY, style="B", fname=str(FONT_PATH), variations={"wght": 750})
+
+
+_BOLD_TOKEN_RE = re.compile(r"(\*\*.+?\*\*)", re.S)
+
+
+def _split_bold_runs(text: str):
+    """Splits into (is_bold, content) runs. A leading colon on a regular
+    run right after a bold run is merged into the bold run (see
+    _write_richtext for why)."""
+    tokens = [t for t in _BOLD_TOKEN_RE.split(text) if t]
+    runs = []
+    for tok in tokens:
+        m = re.match(r"^\*\*(.+)\*\*$", tok, re.S)
+        runs.append((True, m.group(1)) if m else (False, tok))
+
+    for i in range(len(runs) - 1):
+        is_bold, content = runs[i]
+        nxt_bold, nxt_content = runs[i + 1]
+        if is_bold and not nxt_bold and nxt_content.startswith(":"):
+            runs[i] = (True, content + ":")
+            runs[i + 1] = (False, nxt_content[1:])
+    return runs
+
+
+_HEBREW_RE = re.compile(r"[֐-׿]")
+
+
+def _tokenize_words(text: str, prefix: str = ""):
+    """Splits into a flat list of (word, is_bold) tokens in logical
+    (reading) order, from **bold**-marked runs.
+
+    Placing words right-to-left one at a time is only correct for Hebrew,
+    where each word really is its own RTL unit. Doing that to a run of
+    consecutive non-Hebrew words (an English term, or a whole embedded
+    phrase like "(Out of Vocabulary - OOV)") reverses their order relative
+    to each other. So contiguous non-Hebrew words within a run are grouped
+    into one atomic chunk instead of being split individually - a single
+    call/unit lets the shaping engine keep its internal left-to-right
+    order intact. Hebrew words are still split individually, since that's
+    what allows the line to wrap at the right spots."""
+    tokens = []
+    runs = _split_bold_runs(text) or [(False, "")]
+    is_bold0, content0 = runs[0]
+    runs[0] = (is_bold0, prefix + content0)
+    for is_bold, content in runs:
+        words = content.split()
+        i = 0
+        while i < len(words):
+            if _HEBREW_RE.search(words[i]):
+                tokens.append((words[i], is_bold))
+                i += 1
+            else:
+                j = i
+                while j < len(words) and not _HEBREW_RE.search(words[j]):
+                    j += 1
+                tokens.append((" ".join(words[i:j]), is_bold))
+                i = j
+    return tokens
+
+
+def _write_richtext(pdf: FPDF, text: str, size: float, prefix: str = "") -> None:
+    """Renders one right-aligned RTL paragraph with correct bold/regular
+    styling and correct word-wrapping, laying out words manually instead
+    of going through fpdf2's multi_cell/write.
+
+    Two separate fpdf2 bugs forced this: (1) multi_cell's markdown=True
+    bold parsing runs independently on each bidi-reordered fragment, so a
+    "**" marker that lands in its own neutral bidi fragment (which happens
+    whenever a bold run sits right at an English/Hebrew script boundary,
+    e.g. "**Smoothing**: ...טכניקה") gets detached from the word it should
+    wrap, misapplying bold to the wrong stretch of text. (2) write(), which
+    sidesteps that by using single-styled calls, does not right-align
+    wrapped lines at all - every wrapped line starts flush at the left
+    margin, breaking RTL paragraphs that span more than one line.
+    Manually measuring word widths, greedily wrapping them into lines, and
+    placing each word's cell() explicitly from the right margin leftward
+    avoids both bugs at once.
+    """
+    h = size * 0.6
+
+    def word_width(word: str, bold: bool) -> float:
+        pdf.set_font(FONT_FAMILY, style="B" if bold else "", size=size)
+        return pdf.get_string_width(word)
+
+    words = _tokenize_words(text, prefix=prefix)
+    space_w = word_width(" ", False)
+
+    right_edge = pdf.w - pdf.r_margin
+    max_w = right_edge - pdf.l_margin
+
+    lines, cur_line, cur_w = [], [], 0.0
+    for word, is_bold in words:
+        ww = word_width(word, is_bold)
+        extra = ww if not cur_line else space_w + ww
+        if cur_line and cur_w + extra > max_w:
+            lines.append(cur_line)
+            cur_line, cur_w = [], 0.0
+            extra = ww
+        cur_line.append((word, is_bold, ww))
+        cur_w += extra
+    if cur_line:
+        lines.append(cur_line)
+
+    for line in lines:
+        y = pdf.get_y()
+        if y + h > pdf.page_break_trigger:
+            pdf.add_page()
+            y = pdf.get_y()
+        x = right_edge
+        for word, is_bold, ww in line:
+            x -= ww
+            pdf.set_xy(x, y)
+            pdf.set_font(FONT_FAMILY, style="B" if is_bold else "", size=size)
+            pdf.cell(w=ww, h=h, text=word)
+            x -= space_w
+        pdf.set_xy(pdf.l_margin, y + h)
+
+
+def _write_formula(pdf: FPDF, text: str, size: float = 12.0, top_gap: float = 4.0) -> None:
+    """Standalone formulas are pure LTR content; rendering them under the
+    document's global RTL paragraph direction is what caused garbled
+    ordering (e.g. a leading Hebrew-adjacent period jumping to the front).
+    Switch shaping to LTR just for this one line, then switch back.
+
+    Drawn inside a visual box (like a boxed equation in a textbook) so it
+    reads as a distinct callout rather than blending into the prose."""
+    pdf.set_font(FONT_FAMILY, size=size)
+    pdf.ln(top_gap)
+    pdf.set_text_shaping(use_shaping_engine=True, direction="ltr", script="latn", language="en")
+
+    h = size * 0.6
+    pad_x, pad_y = 6.0, 3.0
+    box_w = min(pdf.epw, pdf.get_string_width(text) + 2 * pad_x + 4)
+    box_x = pdf.l_margin + (pdf.epw - box_w) / 2
+
+    height_used = pdf.multi_cell(
+        w=box_w - 2 * pad_x, h=h, text=text, markdown=True, align="C",
+        dry_run=True, output=MethodReturnValue.HEIGHT,
+    )
+    box_y = pdf.get_y()
+
+    pdf.set_draw_color(*HEADING_COLOR)
+    pdf.set_line_width(0.4)
+    pdf.rect(box_x, box_y, box_w, height_used + 2 * pad_y)
+
+    pdf.set_xy(box_x + pad_x, box_y + pad_y)
+    pdf.set_text_color(*INK_COLOR)
+    pdf.multi_cell(w=box_w - 2 * pad_x, h=h, text=text, markdown=True, align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_y(box_y + height_used + 2 * pad_y)
+
+    pdf.set_text_shaping(use_shaping_engine=True, direction="rtl", script="hebr", language="he")
+    pdf.page_dirty = True
+
+
+def _write_paragraph(pdf: FPDF, text: str, size: float = 11.5, top_gap: float = 2.0) -> None:
+    pdf.set_text_color(*INK_COLOR)
+    pdf.ln(top_gap)
+    _write_richtext(pdf, text, size=size)
+    pdf.page_dirty = True
+
+
+def _write_list_item(pdf: FPDF, text: str, size: float = 11.5, top_gap: float = 2.2) -> None:
+    pdf.set_text_color(*INK_COLOR)
+    pdf.ln(top_gap)
+    # Bullet goes FIRST in the logical string: with RTL paragraph direction
+    # the first logical character renders at the visual right (start) side,
+    # which is where a bullet belongs for right-aligned Hebrew text.
+    pdf.set_right_margin(pdf.r_margin + 6)
+    _write_richtext(pdf, text, size=size, prefix="• ")
+    pdf.set_right_margin(pdf.r_margin - 6)
+    pdf.page_dirty = True
+
+
+# Headings at these levels mark the start of a new "subject" - each one
+# starts on a fresh page (unless it's the very first thing on an
+# already-blank page, to avoid a pointless blank page before it).
+_SUBJECT_HEADING_LEVELS = {3}
+_SUBJECT_HEADING_TEXT = {"מושגי מפתח"}  # the glossary closes out a unit's subjects too
+
+
+def _write_heading(pdf: FPDF, text: str, level: int) -> None:
+    is_subject_heading = level in _SUBJECT_HEADING_LEVELS or text.strip() in _SUBJECT_HEADING_TEXT
+    if is_subject_heading and pdf.page_dirty:
+        pdf.add_page()
+
+    sizes = {1: 24, 2: 17, 3: 13.5}
+    gaps = {1: 4, 2: 8, 3: 6}
+    pdf.ln(0 if is_subject_heading and not pdf.page_dirty else gaps[level])
+    pdf.set_font(FONT_FAMILY, style="B", size=sizes[level])
+    pdf.set_text_color(*HEADING_COLOR)
+    pdf.multi_cell(w=pdf.epw, h=sizes[level] * 0.7, text=text, align="R", new_x="LMARGIN", new_y="NEXT")
+    if level <= 2:
+        pdf.set_draw_color(*HEADING_COLOR)
+        pdf.set_line_width(0.5)
+        y = pdf.get_y() + 1
+        pdf.line(pdf.l_margin, y, pdf.w - pdf.r_margin, y)
+        pdf.ln(3)
+    pdf.page_dirty = True
+
+
+_LIST_RE = re.compile(r"^\s*(?:[-*]|\d+[\.\)])\s+(.*)$")
+_HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
+_FORMULA_RE = re.compile(r"^@@F@@\s*(.*)$")
+
+
+def _render_section(pdf: FPDF, section_md: str) -> None:
+    for raw_line in section_md.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            continue
+
+        formula_match = _FORMULA_RE.match(line.strip())
+        if formula_match:
+            _write_formula(pdf, formula_match.group(1).strip())
+            continue
+
+        heading_match = _HEADING_RE.match(line)
+        if heading_match:
+            _write_heading(pdf, heading_match.group(2).strip(), len(heading_match.group(1)))
+            continue
+
+        list_match = _LIST_RE.match(line)
+        if list_match:
+            _write_list_item(pdf, list_match.group(1).strip())
+            continue
+
+        _write_paragraph(pdf, line.strip())
+
+
+def _add_back_cover(pdf: FPDF, course_name: str = None) -> None:
+    pdf.page_bg = BACK_COVER_BG
+    pdf.rule_color = BACK_COVER_RULE_COLOR
+    pdf.add_page()
+
+    pdf.set_y(pdf.h / 2 - 20)
+    pdf.set_font(FONT_FAMILY, style="B", size=22)
+    pdf.set_text_color(*HEADING_COLOR)
+    pdf.multi_cell(w=pdf.epw, h=14, text="בהצלחה במבחן!", align="C")
+
+    if course_name:
+        pdf.ln(4)
+        pdf.set_font(FONT_FAMILY, size=12)
+        pdf.set_text_color(*INK_COLOR)
+        pdf.multi_cell(w=pdf.epw, h=8, text=course_name, align="C")
+
+
+def build_pdf(sections: List[str], output_path: Path, course_name: str = None) -> Path:
+    """sections[0] is the cover page, the rest are one per unit. Each
+    section starts on a new page. A yellow, notebook-ruled back cover is
+    appended after the last section."""
+    if not FONT_PATH.exists():
+        raise FileNotFoundError(
+            f"Font not found at {FONT_PATH}. Expected assets/fonts/PlaypenSansHebrew.ttf."
+        )
+
+    pdf = NotebookPDF(orientation="P", format="A4")
+    pdf.set_margins(left=20, top=25, right=20)
+    pdf.set_auto_page_break(auto=True, margin=18)
+    _register_font(pdf)
+    pdf.set_text_shaping(use_shaping_engine=True, direction="rtl", script="hebr", language="he")
+
+    for section_md in sections:
+        pdf.add_page()
+        pdf.set_y(25)
+        _render_section(pdf, section_md)
+
+    _add_back_cover(pdf, course_name=course_name)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf.output(str(output_path))
+    return output_path

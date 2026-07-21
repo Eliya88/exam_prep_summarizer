@@ -1,0 +1,94 @@
+# Course config for "NLP".
+# Paths are relative to this file's folder (courses/) unless absolute.
+course_name: "NLP"
+lectures_dir: "../../NLP/Lectures"
+exercises_dir: "../../NLP/Exercises"
+output_dir: "../output/NLP"
+model: "gemini-3-flash-preview"
+
+# One unit per lecture by default (each lecture PDF here is large - tens of
+# MB / likely 60-100+ slides - so keeping them separate keeps each run
+# focused; merge two lecture_files into one unit if you know two lectures
+# are really one continuous topic).
+#
+# Tutorials (T1-T8) are their own units below rather than merged into a
+# lecture unit - filenames don't reliably map to lecture numbers (e.g. T5's
+# own title page says "Tutorial 6"), so standalone units avoid guessing
+# wrong. "exrecises.pdf" is deliberately excluded: it's a 204-page file that
+# looks like all tutorials merged into one - including it too would process
+# (and pay for) the same content twice.
+#
+# Run `python main.py --list-pdfs "../NLP/Lectures"` or
+# `python main.py --list-pdfs "../NLP/Exercises"` to print filenames.
+units:
+  - name: "Intro to NLP"
+    lecture_files: ["L1_intro.pdf"]
+    exercise_files: []
+
+  - name: "Noisy Channel Model"
+    lecture_files: ["L2_noisy_channel.pdf"]
+    exercise_files: []
+
+  - name: "Corpus Linguistics"
+    lecture_files: ["L3_corpus_linguistics.pdf"]
+    exercise_files: []
+
+  - name: "Introduction to Embeddings"
+    lecture_files: ["L4_embeddings_intro.pdf"]
+    exercise_files: []
+
+  - name: "Discriminative Models & Word2Vec"
+    lecture_files: ["L5_discriminative_w2v.pdf"]
+    exercise_files: []
+
+  - name: "Feed-Forward Neural Networks"
+    lecture_files: ["L6_FFNN.pdf"]
+    exercise_files: []
+
+  - name: "Attention, Transformers & Transformer Grammars"
+    lecture_files: ["L7_attention_transformer_grammars.pdf"]
+    exercise_files: []
+
+  - name: "BERT & GPT"
+    lecture_files: ["L8_bert_gpt.pdf"]
+    exercise_files: []
+
+  - name: "Chain-of-Thought & Self-Attention"
+    lecture_files: ["L9_CoT_SA.pdf"]
+    exercise_files: []
+
+  - name: "RLHF, RAG & Agents"
+    lecture_files: ["L10_RLHF_RAG_Agents.pdf"]
+    exercise_files: []
+
+  - name: "Ethics, IP & Legal Issues in NLP"
+    lecture_files: ["L11_ethics_ip_legal.pdf"]
+    exercise_files: []
+
+  - name: "Tutorial 1 (Exercise)"
+    lecture_files: []
+    exercise_files: ["T1.pdf"]
+
+  - name: "Tutorial 2 (Exercise)"
+    lecture_files: []
+    exercise_files: ["T2.pdf"]
+
+  - name: "Tutorial 3 - Perplexity, Tokenization (Exercise)"
+    lecture_files: []
+    exercise_files: ["T3 - Preplexity, Tokenization.pdf"]
+
+  - name: "Tutorial 4 - ML (Exercise)"
+    lecture_files: []
+    exercise_files: ["T4 - ML.pdf"]
+
+  - name: "Tutorial 5 - Neural Embeddings (Exercise)"
+    lecture_files: []
+    exercise_files: ["T5 - Neural Embbedings.pdf"]
+
+  - name: "Tutorial 7 - RNNs (Exercise)"
+    lecture_files: []
+    exercise_files: ["T7 - RNNs.pdf"]
+
+  - name: "Tutorial 8 - Self Attention (Exercise)"
+    lecture_files: []
+    exercise_files: ["T8 - Self Attention.pdf"]
