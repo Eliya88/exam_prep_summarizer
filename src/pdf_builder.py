@@ -12,12 +12,17 @@ its built-in `markdown=True` cell option to bold `**text**` spans.
 """
 from __future__ import annotations
 
+import io
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from fpdf import FPDF
 from fpdf.enums import MethodReturnValue
+from PIL import Image
 
 FONT_FAMILY = "PlaypenHebrew"
 FONT_PATH = Path(__file__).parent.parent / "assets" / "fonts" / "PlaypenSansHebrew.ttf"
@@ -180,16 +185,41 @@ def _write_richtext(pdf: FPDF, text: str, size: float, prefix: str = "") -> None
         pdf.set_xy(pdf.l_margin, y + h)
 
 
-def _write_formula(pdf: FPDF, text: str, size: float = 12.0, top_gap: float = 4.0) -> None:
-    """Standalone formulas are pure LTR content; rendering them under the
-    document's global RTL paragraph direction is what caused garbled
-    ordering (e.g. a leading Hebrew-adjacent period jumping to the front).
-    Switch shaping to LTR just for this one line, then switch back.
+_MATH_FONT_SIZE = 15  # pt - the visual scale rendered formulas come out at
+_MATH_DPI = 300        # raster quality only; physical size is derived from this
 
-    Drawn inside a visual box (like a boxed equation in a textbook) so it
-    reads as a distinct callout rather than blending into the prose."""
+
+def _render_math_image(latex_body: str) -> Optional[io.BytesIO]:
+    """Renders a LaTeX math expression via matplotlib's "mathtext" parser -
+    a real subset of LaTeX math syntax (\\frac, \\sum, \\sqrt, sub/superscripts,
+    Greek letters, \\left(...\\right), etc.) that needs no system LaTeX
+    install - to an in-memory transparent PNG. Returns None if the
+    expression fails to parse, so the caller can fall back to plain text
+    instead of crashing the whole build over one malformed formula."""
+    try:
+        r, g, b = INK_COLOR
+        color = f"#{r:02x}{g:02x}{b:02x}"
+        fig = plt.figure(figsize=(0.1, 0.1))
+        fig.patch.set_alpha(0.0)
+        fig.text(0.5, 0.5, f"${latex_body}$", fontsize=_MATH_FONT_SIZE, ha="center", va="center", color=color)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=_MATH_DPI, transparent=True, bbox_inches="tight", pad_inches=0.08)
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+    except Exception:
+        plt.close("all")
+        return None
+
+
+def _write_formula_text_fallback(pdf: FPDF, text: str, size: float = 12.0) -> None:
+    """Old plain-text-in-a-box rendering, used only if a formula doesn't
+    parse as mathtext (e.g. the model slipped back into plain notation
+    instead of LaTeX). Standalone formulas are pure LTR content; rendering
+    them under the document's global RTL paragraph direction is what caused
+    garbled ordering (e.g. a leading Hebrew-adjacent period jumping to the
+    front), so shaping is switched to LTR just for this one line."""
     pdf.set_font(FONT_FAMILY, size=size)
-    pdf.ln(top_gap)
     pdf.set_text_shaping(use_shaping_engine=True, direction="ltr", script="latn", language="en")
 
     h = size * 0.6
@@ -213,6 +243,48 @@ def _write_formula(pdf: FPDF, text: str, size: float = 12.0, top_gap: float = 4.
     pdf.set_y(box_y + height_used + 2 * pad_y)
 
     pdf.set_text_shaping(use_shaping_engine=True, direction="rtl", script="hebr", language="he")
+
+
+def _write_formula(pdf: FPDF, text: str, top_gap: float = 4.0) -> None:
+    """Draws a standalone formula as real typeset math (rendered via
+    matplotlib's mathtext, see _render_math_image), boxed like a callout
+    equation in a textbook. Falls back to the old plain-text box if the
+    text doesn't parse as math."""
+    pdf.ln(top_gap)
+
+    img_buf = _render_math_image(text)
+    if img_buf is None:
+        _write_formula_text_fallback(pdf, text)
+        pdf.page_dirty = True
+        return
+
+    img = Image.open(img_buf)
+    px_w, px_h = img.size
+    img_w_mm = px_w / _MATH_DPI * 25.4
+    img_h_mm = px_h / _MATH_DPI * 25.4
+
+    max_w = pdf.epw * 0.85
+    if img_w_mm > max_w:
+        scale = max_w / img_w_mm
+        img_w_mm *= scale
+        img_h_mm *= scale
+
+    pad_x, pad_y = 6.0, 4.0
+    box_w = img_w_mm + 2 * pad_x
+    box_h = img_h_mm + 2 * pad_y
+    box_x = pdf.l_margin + (pdf.epw - box_w) / 2
+
+    if pdf.get_y() + box_h > pdf.page_break_trigger:
+        pdf.add_page()
+    box_y = pdf.get_y()
+
+    pdf.set_draw_color(*HEADING_COLOR)
+    pdf.set_line_width(0.4)
+    pdf.rect(box_x, box_y, box_w, box_h)
+
+    img_buf.seek(0)
+    pdf.image(img_buf, x=box_x + pad_x, y=box_y + pad_y, w=img_w_mm, h=img_h_mm)
+    pdf.set_y(box_y + box_h)
     pdf.page_dirty = True
 
 

@@ -74,6 +74,9 @@ def process_unit(client, course: CourseConfig, unit: Unit, digest: str, use_cach
     section_titles = _parse_agenda(agenda_text)
     print(f"  Agenda: {len(section_titles)} section(s)")
 
+    print("  Planning content boundaries...")
+    gemini_client.send(chat, [prompts.OUTLINE_PROMPT])
+
     numbered_titles = list(enumerate(section_titles, start=1))
     section_bodies = []
     for batch_start in range(0, len(numbered_titles), SECTION_BATCH_SIZE):
