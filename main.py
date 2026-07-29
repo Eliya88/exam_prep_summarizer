@@ -3,6 +3,7 @@
 Usage:
     python main.py --course-dir "../NLP"                  # auto-discover, no YAML needed
     python main.py --course-dir "../NLP" --no-cache
+    python main.py --course-dir "../NLP" --no-exercises   # lectures only, skip exercise/tutorial units
     python main.py --course courses/data_science.yaml     # or use a hand-written YAML config
     python main.py --course courses/data_science.yaml --refresh-context
     python main.py --list-pdfs "Data Science/Lectures"   # helper to write configs
@@ -42,6 +43,7 @@ def main() -> None:
     parser.add_argument("--course", type=str, help="Path to a course YAML config, e.g. courses/data_science.yaml")
     parser.add_argument("--no-cache", action="store_true", help="Re-call Gemini for every unit even if a cached result exists")
     parser.add_argument("--refresh-context", action="store_true", help="Rebuild the full-course text digest even if unchanged")
+    parser.add_argument("--no-exercises", action="store_true", help="Exclude exercise/tutorial units from the summary (included by default)")
     parser.add_argument("--list-pdfs", type=str, metavar="DIR", help="List PDFs in DIR formatted for a course YAML, then exit")
     args = parser.parse_args()
 
@@ -58,6 +60,13 @@ def main() -> None:
         course = discover_course_config(Path(args.course_dir))
     else:
         course = load_course_config(Path(args.course))
+
+    if args.no_exercises:
+        excluded = [u for u in course.units if not u.lecture_files]
+        course.units = [u for u in course.units if u.lecture_files]
+        for u in excluded:
+            print(f"  [--no-exercises] flag: skipping exercise unit: {u.name}")
+
     print(f"Course: {course.course_name}  |  model: {course.model}  |  units: {len(course.units)}")
 
     sections = run(course, use_cache=not args.no_cache, force_context=args.refresh_context)

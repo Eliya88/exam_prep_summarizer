@@ -87,6 +87,8 @@ Flags:
 - `--refresh-context` - rebuild the full-course text digest (only needed if
   you added/edited a source PDF and want the cross-reference context to
   reflect it immediately; it also auto-rebuilds when file mtimes change).
+- `--no-exercises` - skip exercise/tutorial units, summarizing only the
+  lecture units. Exercises are included by default.
 
 ## Cost
 
