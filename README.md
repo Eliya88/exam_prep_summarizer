@@ -47,8 +47,7 @@ py -3.12 -m venv .venv
 pip install -r requirements.txt
 ```
 
-The Gemini API key is already in `.env` (copied from `API_KEY.txt`, same
-key used by the `pii_detection` project). If you rotate it, update `.env`.
+The Gemini API key is already in `.env` (copied from `API_KEY.txt`). If you rotate it, update `.env`.
 
 ## Usage
 
