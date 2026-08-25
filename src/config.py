@@ -16,6 +16,11 @@ from .prompts import PROMPT_VERSION
 # case of "one folder with a Lectures subfolder and an Exercises subfolder".
 _LECTURE_DIR_NAMES = {"lectures", "lecture", "slides"}
 _EXERCISE_DIR_NAMES = {"exercises", "exercise", "exrecises", "tutorials", "tutorial"}
+# Past-exam folders, used only when --with-tests is passed.
+_EXAM_DIR_NAMES = {
+    "tests", "test", "exams", "exam", "past exams", "previous exams",
+    "מבחנים", "מבחנים קודמים", "בחינות",
+}
 
 
 def _natural_key(s: str) -> list:
@@ -60,6 +65,19 @@ class CourseConfig:
     output_dir: Path
     units: List[Unit]
     model: str = "gemini-3-flash-preview"
+    # Folder of past-exam PDFs. Only used when the run asks for test
+    # questions (--with-tests); None when no such folder was found.
+    exams_dir: Optional[Path] = None
+
+    def exam_paths(self) -> List[Path]:
+        """Past-exam PDFs, natural-sorted. Same leading-underscore skip rule
+        as lecture/exercise discovery. Empty if there's no exams folder."""
+        if not self.exams_dir or not self.exams_dir.exists():
+            return []
+        return sorted(
+            (p for p in self.exams_dir.glob("*.pdf") if not p.stem.startswith("_")),
+            key=lambda p: _natural_key(p.stem),
+        )
 
 
 def load_course_config(yaml_path: Path) -> CourseConfig:
@@ -79,6 +97,13 @@ def load_course_config(yaml_path: Path) -> CourseConfig:
     lectures_dir = resolve(data.get("lectures_dir"), f"../../{data['course_name']}/Lectures")
     exercises_dir = resolve(data.get("exercises_dir"), f"../../{data['course_name']}/Exercises")
     output_dir = resolve(data.get("output_dir"), f"../output/{data['course_name']}")
+
+    # An explicit exams_dir wins; otherwise look for a conventionally-named
+    # folder next to the lectures, and leave it unset if there isn't one.
+    if data.get("exams_dir"):
+        exams_dir = resolve(data["exams_dir"], "")
+    else:
+        exams_dir = _find_subdir(lectures_dir.parent, _EXAM_DIR_NAMES) if lectures_dir.parent.exists() else None
 
     units = [
         Unit(
@@ -102,6 +127,7 @@ def load_course_config(yaml_path: Path) -> CourseConfig:
         output_dir=output_dir,
         units=units,
         model=data.get("model", "gemini-3-flash-preview"),
+        exams_dir=exams_dir,
     )
 
 
@@ -132,6 +158,7 @@ def discover_course_config(
     course_name = course_dir.name
     lectures_dir = _find_subdir(course_dir, _LECTURE_DIR_NAMES) or (course_dir / "Lectures")
     exercises_dir = _find_subdir(course_dir, _EXERCISE_DIR_NAMES) or (course_dir / "Exercises")
+    exams_dir = _find_subdir(course_dir, _EXAM_DIR_NAMES)
     output_dir = Path(output_root).resolve() / course_name if output_root else (
         Path(__file__).parent.parent / "output" / course_name
     )
@@ -169,4 +196,5 @@ def discover_course_config(
         output_dir=output_dir,
         units=units,
         model=model,
+        exams_dir=exams_dir,
     )

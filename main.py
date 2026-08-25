@@ -4,6 +4,7 @@ Usage:
     python main.py --course-dir "../NLP"                  # auto-discover, no YAML needed
     python main.py --course-dir "../NLP" --no-cache
     python main.py --course-dir "../NLP" --no-exercises   # lectures only, skip exercise/tutorial units
+    python main.py --course-dir "../NLP" --with-tests     # add a past-exam practice page after each chapter
     python main.py --course courses/data_science.yaml     # or use a hand-written YAML config
     python main.py --course courses/data_science.yaml --refresh-context
     python main.py --list-pdfs "Data Science/Lectures"   # helper to write configs
@@ -44,6 +45,7 @@ def main() -> None:
     parser.add_argument("--no-cache", action="store_true", help="Re-call Gemini for every unit even if a cached result exists")
     parser.add_argument("--refresh-context", action="store_true", help="Rebuild the full-course text digest even if unchanged")
     parser.add_argument("--no-exercises", action="store_true", help="Exclude exercise/tutorial units from the summary (included by default)")
+    parser.add_argument("--with-tests", action="store_true", help="After each chapter, add a practice page with a question from the course's past exams and a worked solution (needs an exams folder in the course directory)")
     parser.add_argument("--list-pdfs", type=str, metavar="DIR", help="List PDFs in DIR formatted for a course YAML, then exit")
     args = parser.parse_args()
 
@@ -68,11 +70,25 @@ def main() -> None:
             print(f"  [--no-exercises] flag: skipping exercise unit: {u.name}")
 
     print(f"Course: {course.course_name}  |  model: {course.model}  |  units: {len(course.units)}")
+    if args.with_tests:
+        n_exams = len(course.exam_paths())
+        print(f"  [--with-tests] flag: {n_exams} past-exam PDF(s) from "
+              f"{course.exams_dir if course.exams_dir else 'no exams folder found'}")
 
-    sections = run(course, use_cache=not args.no_cache, force_context=args.refresh_context)
+    sections = run(
+        course,
+        use_cache=not args.no_cache,
+        force_context=args.refresh_context,
+        with_tests=args.with_tests,
+    )
 
     output_path = course.output_dir / f"{course.course_name.replace(' ', '_')}_exam_prep.pdf"
-    build_pdf(sections, output_path, course_name=course.course_name)
+    build_pdf(
+        sections,
+        output_path,
+        course_name=course.course_name,
+        chapter_titles=[u.name for u in course.units],
+    )
     print(f"\nDone. Wrote: {output_path}")
 
 

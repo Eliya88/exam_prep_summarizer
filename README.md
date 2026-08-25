@@ -19,13 +19,20 @@ For each **unit** (one lecture, or a group of lectures on one subject) it:
    fix for the "one summary is too short / misses material" problem: each
    section gets its own dedicated response instead of being squeezed into a
    single reply.
-4. Merges every unit into one Markdown document (cover page + table of
+4. Optionally (`--with-tests`) finds a question from the course's past exam
+   papers that tests that unit, and writes it up with a full worked
+   solution as a practice page at the end of the unit.
+5. Merges every unit into one Markdown document (cover page + table of
    contents, then one section per unit, each starting on a new page) and
    renders it to a styled, right-to-left **Hebrew** PDF with a handwritten
    look (Playpen Sans Hebrew, notebook-ruled background). Gemini is
    instructed to write in Hebrew but keep technical terms/model names/
    acronyms in their original English form inline, matching normal academic
    convention (e.g. "אלגוריתם ה-BERT").
+
+The rendered PDF carries the chapter's name in small type at the top of
+every page, and the contents list on the cover is clickable - each entry
+jumps straight to that chapter.
 
 Results are cached per-unit under `output/<course>/cache/`, keyed by the
 unit's source filenames + modified-times, so re-running after editing one
@@ -89,6 +96,25 @@ Flags:
   reflect it immediately; it also auto-rebuilds when file mtimes change).
 - `--no-exercises` - skip exercise/tutorial units, summarizing only the
   lecture units. Exercises are included by default.
+- `--with-tests` - after each chapter, add a practice page holding one
+  question from the course's past exams that tests that chapter, a full
+  worked solution, and a short "what this is really testing" list. Off by
+  default.
+
+  The exam papers are found automatically: any folder in the course
+  directory named `מבחנים`, `בחינות`, `tests`, or `exams` (case-insensitive),
+  or an explicit `exams_dir:` in a YAML config. If the flag is passed but
+  no such folder exists, the run just carries on without exam pages. When
+  the exams contain nothing relevant to a given chapter, that chapter
+  simply gets no practice page rather than an invented question.
+
+  Cost note: the exam papers are sent with every chapter's request, so a
+  large exam archive is the dominant cost of this flag - roughly 258 tokens
+  per exam page, per chapter (17 papers / 418 pages across 19 chapters
+  works out to about **$1.20** on top of the normal run). Exam pages are
+  cached separately from the chapter summaries, so turning the flag on
+  later doesn't re-summarize anything, and tweaking `EXAM_PROMPT` only
+  invalidates the practice pages.
 
 ## Cost
 

@@ -30,6 +30,7 @@ FONT_PATH = Path(__file__).parent.parent / "assets" / "fonts" / "PlaypenSansHebr
 INK_COLOR = (43, 38, 38)          # body text - warm near-black
 HEADING_COLOR = (172, 74, 39)     # burnt-orange marker color for headings
 RULE_COLOR = (222, 210, 195)      # faint notebook rule lines
+CHAPTER_LABEL_COLOR = (166, 146, 132)  # muted warm gray for the running chapter header
 PAGE_BG = (255, 253, 247)         # warm off-white "paper"
 BACK_COVER_BG = (249, 238, 187)   # slightly yellow notebook-cover tone
 BACK_COVER_RULE_COLOR = (214, 195, 140)  # rule lines a touch darker, to show against the yellow
@@ -41,6 +42,9 @@ class NotebookPDF(FPDF):
         self.page_bg = PAGE_BG
         self.rule_color = RULE_COLOR
         self.page_dirty = False  # has anything been written on the current page yet?
+        # Name of the chapter (unit) the current page belongs to, drawn small
+        # at the top of every page. None on the covers, which have no chapter.
+        self.chapter_label = None
 
     def add_page(self, *args, **kwargs) -> None:
         super().add_page(*args, **kwargs)
@@ -56,6 +60,24 @@ class NotebookPDF(FPDF):
         while y < self.h - 15:
             self.line(12, y, self.w - 12, y)
             y += 8
+
+        # Running chapter name, above the first ruled line. add_page() saves
+        # and restores font/colors around this call, so changing them here
+        # can't leak into the body text that follows.
+        if self.chapter_label:
+            self.set_font(FONT_FAMILY, size=8)
+            self.set_text_color(*CHAPTER_LABEL_COLOR)
+            self.set_xy(self.l_margin, 13)
+            self.cell(w=self.epw, h=5, text=self.chapter_label, align="R")
+            self.set_draw_color(*self.rule_color)
+            self.set_line_width(0.2)
+            self.line(self.l_margin, 19.5, self.w - self.r_margin, 19.5)
+
+        # Writing the label above moved the cursor; put it back where the
+        # page's body content is expected to start. Without this, anything
+        # drawn right after an automatic page break (a forced subject
+        # heading, a wrapped paragraph) lands on top of the running header.
+        self.set_xy(self.l_margin, self.t_margin)
 
     def footer(self) -> None:
         self.set_y(-12)
@@ -127,7 +149,8 @@ def _tokenize_words(text: str, prefix: str = ""):
     return tokens
 
 
-def _write_richtext(pdf: FPDF, text: str, size: float, prefix: str = "") -> None:
+def _write_richtext(pdf: FPDF, text: str, size: float, prefix: str = "",
+                    link: Optional[int] = None) -> None:
     """Renders one right-aligned RTL paragraph with correct bold/regular
     styling and correct word-wrapping, laying out words manually instead
     of going through fpdf2's multi_cell/write.
@@ -144,6 +167,9 @@ def _write_richtext(pdf: FPDF, text: str, size: float, prefix: str = "") -> None
     Manually measuring word widths, greedily wrapping them into lines, and
     placing each word's cell() explicitly from the right margin leftward
     avoids both bugs at once.
+
+    `link`, when given, is an fpdf2 internal-link id: every laid-out line
+    gets a clickable rectangle covering exactly the text it drew.
     """
     h = size * 0.6
 
@@ -182,6 +208,11 @@ def _write_richtext(pdf: FPDF, text: str, size: float, prefix: str = "") -> None
             pdf.set_font(FONT_FAMILY, style="B" if is_bold else "", size=size)
             pdf.cell(w=ww, h=h, text=word)
             x -= space_w
+        if link is not None:
+            # x sits one space to the left of the last word drawn, so the
+            # text actually spans [x + space_w, right_edge].
+            line_left = x + space_w
+            pdf.link(line_left, y, right_edge - line_left, h, link)
         pdf.set_xy(pdf.l_margin, y + h)
 
 
@@ -295,6 +326,19 @@ def _write_paragraph(pdf: FPDF, text: str, size: float = 11.5, top_gap: float = 
     pdf.page_dirty = True
 
 
+def _write_toc_item(pdf: FPDF, number: int, title: str, link: Optional[int],
+                    size: float = 12.0, top_gap: float = 2.6) -> None:
+    """One clickable table-of-contents line on the cover page. Drawn in the
+    heading color so it reads as a link, and jumping to `link`'s chapter."""
+    pdf.set_text_color(*HEADING_COLOR)
+    pdf.ln(top_gap)
+    pdf.set_right_margin(pdf.r_margin + 6)
+    _write_richtext(pdf, f"{number}. {title}", size=size, link=link)
+    pdf.set_right_margin(pdf.r_margin - 6)
+    pdf.set_text_color(*INK_COLOR)
+    pdf.page_dirty = True
+
+
 def _write_list_item(pdf: FPDF, text: str, size: float = 11.5, top_gap: float = 2.2) -> None:
     pdf.set_text_color(*INK_COLOR)
     pdf.ln(top_gap)
@@ -311,7 +355,9 @@ def _write_list_item(pdf: FPDF, text: str, size: float = 11.5, top_gap: float = 
 # starts on a fresh page (unless it's the very first thing on an
 # already-blank page, to avoid a pointless blank page before it).
 _SUBJECT_HEADING_LEVELS = {3}
-_SUBJECT_HEADING_TEXT = {"מושגי מפתח"}  # the glossary closes out a unit's subjects too
+# The glossary and the past-exam question both close out a unit, and each
+# gets its own page like any other subject.
+_SUBJECT_HEADING_TEXT = {"מושגי מפתח", "שאלה ממבחנים קודמים"}
 
 
 def _write_heading(pdf: FPDF, text: str, level: int) -> None:
@@ -337,12 +383,24 @@ def _write_heading(pdf: FPDF, text: str, level: int) -> None:
 _LIST_RE = re.compile(r"^\s*(?:[-*]|\d+[\.\)])\s+(.*)$")
 _HEADING_RE = re.compile(r"^(#{1,3})\s+(.*)$")
 _FORMULA_RE = re.compile(r"^@@F@@\s*(.*)$")
+# Cover-page table-of-contents entry: "@@TOC@@ 3|Corpus Linguistics".
+_TOC_RE = re.compile(r"^@@TOC@@\s*(\d+)\|(.*)$")
 
 
-def _render_section(pdf: FPDF, section_md: str) -> None:
+def _render_section(pdf: FPDF, section_md: str,
+                    chapter_links: Optional[List[int]] = None) -> None:
     for raw_line in section_md.splitlines():
         line = raw_line.rstrip()
         if not line.strip():
+            continue
+
+        toc_match = _TOC_RE.match(line.strip())
+        if toc_match:
+            number = int(toc_match.group(1))
+            link = None
+            if chapter_links and 1 <= number <= len(chapter_links):
+                link = chapter_links[number - 1]
+            _write_toc_item(pdf, number, toc_match.group(2).strip(), link)
             continue
 
         formula_match = _FORMULA_RE.match(line.strip())
@@ -366,6 +424,7 @@ def _render_section(pdf: FPDF, section_md: str) -> None:
 def _add_back_cover(pdf: FPDF, course_name: str = None) -> None:
     pdf.page_bg = BACK_COVER_BG
     pdf.rule_color = BACK_COVER_RULE_COLOR
+    pdf.chapter_label = None  # the back cover belongs to no chapter
     pdf.add_page()
 
     pdf.set_y(pdf.h / 2 - 20)
@@ -380,10 +439,16 @@ def _add_back_cover(pdf: FPDF, course_name: str = None) -> None:
         pdf.multi_cell(w=pdf.epw, h=8, text=course_name, align="C")
 
 
-def build_pdf(sections: List[str], output_path: Path, course_name: str = None) -> Path:
+def build_pdf(sections: List[str], output_path: Path, course_name: str = None,
+              chapter_titles: Optional[List[str]] = None) -> Path:
     """sections[0] is the cover page, the rest are one per unit. Each
     section starts on a new page. A yellow, notebook-ruled back cover is
-    appended after the last section."""
+    appended after the last section.
+
+    `chapter_titles` names the unit behind each section after the cover
+    (so sections[i] is chapter_titles[i - 1]). It drives both the running
+    chapter header on every page and the cover's clickable contents list.
+    """
     if not FONT_PATH.exists():
         raise FileNotFoundError(
             f"Font not found at {FONT_PATH}. Expected assets/fonts/PlaypenSansHebrew.ttf."
@@ -395,10 +460,22 @@ def build_pdf(sections: List[str], output_path: Path, course_name: str = None) -
     _register_font(pdf)
     pdf.set_text_shaping(use_shaping_engine=True, direction="rtl", script="hebr", language="he")
 
-    for section_md in sections:
+    # Link ids have to exist before the cover is drawn, but a chapter's real
+    # target page is only known once that chapter starts. Seed them pointing
+    # at page 1 (fpdf2 refuses to attach a link with no page assigned) and
+    # retarget each below - set_link mutates the destination in place, so the
+    # annotations already written on the cover follow along.
+    titles = chapter_titles or []
+    chapter_links = [pdf.add_link(page=1) for _ in titles]
+
+    for idx, section_md in enumerate(sections):
+        chapter_idx = idx - 1  # sections[0] is the cover, which has no chapter
+        pdf.chapter_label = titles[chapter_idx] if 0 <= chapter_idx < len(titles) else None
         pdf.add_page()
         pdf.set_y(25)
-        _render_section(pdf, section_md)
+        if 0 <= chapter_idx < len(chapter_links):
+            pdf.set_link(chapter_links[chapter_idx], page=pdf.page_no(), y=0)
+        _render_section(pdf, section_md, chapter_links=chapter_links if idx == 0 else None)
 
     _add_back_cover(pdf, course_name=course_name)
 

@@ -1,1 +1,11 @@
-.venv\Scripts\python.exe main.py --course-dir "../<Course_Name>" --no-exercises
+.venv\Scripts\python.exe main.py --course-dir "../<Course_Name>" --no-exercises --with-tests
+
+
+
+
+Flag	Effect
+--course-dir "../CourseName"	      auto-discover chapters from that folder's Lectures/Exercises subfolders (required — path is                  relative to exam_prep_summarizer)
+--no-cache	                      re-call Gemini for every chapter even if already cached
+--refresh-context	              rebuild the full-course cross-reference digest
+--no-exercises	                      skip exercise/tutorial chapters, lectures only
+--with-tests	                      add a past-exam practice page after each chapter (needs an exams folder)

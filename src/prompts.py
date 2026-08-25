@@ -6,6 +6,11 @@ and are easy to tune without touching pipeline logic."""
 # required formatting). It's folded into each unit's cache key.
 PROMPT_VERSION = "v10-latex-formulas"
 
+# Versions the past-exam question blocks separately from the summary prompts
+# above, so tuning EXAM_PROMPT only invalidates cached exam pages and leaves
+# the (expensive) cached chapter summaries alone.
+EXAM_PROMPT_VERSION = "e1-past-exam-question"
+
 SYSTEM_INSTRUCTION = """You are an expert teacher writing exhaustive exam-study material for a \
 university course titled "{course_name}".
 
@@ -110,6 +115,41 @@ can scan the summary by its bold anchors. Do not bold anything else. Write direc
 the material - do not reference slides, the course, or the presentation, and do not open any topic with a \
 meta-commentary sentence. Do not skip anything substantive within a topic, and do not cover any topic \
 outside this batch."""
+
+EXAM_NO_QUESTION_MARKER = "@@NOEXAM@@"
+
+EXAM_PROMPT = """Attached are the past exam papers for this course, from previous years. Below is the \
+study summary of ONE chapter of the course, titled "{unit_name}":
+
+--- START OF CHAPTER SUMMARY ---
+{unit_summary}
+--- END OF CHAPTER SUMMARY ---
+
+Find in the attached past exams ONE question that tests the material of THIS chapter specifically, and \
+write a worked exam-practice page about it in Hebrew, using exactly this structure and nothing else:
+
+**השאלה** (מתוך {{exam file name, e.g. 2024_A}}): then restate the question fully and faithfully, in \
+Hebrew, including every number, symbol, and sub-part it contains. Keep it self-contained - a student must \
+be able to answer it from your restatement alone, without the original exam paper. If the question relies \
+on a table or on data, write that data out in text.
+
+**הפתרון**: then give the full worked solution, explaining every step and the reasoning behind it, not \
+just the final answer. Where a step uses a formula from the chapter, show it. Where a step involves a \
+calculation, show the arithmetic. Finish with the final answer stated plainly.
+
+**נקודות למבחן**: then a short bullet list of what this question is really testing, the common mistakes a \
+student makes on it, and what to watch for if a similar question shows up.
+
+Choose a question that genuinely belongs to this chapter's material - not one that merely mentions a term \
+from it in passing. Prefer a question that covers the chapter's central ideas over a narrow technical \
+detail. If several exams ask essentially the same question, pick the clearest one and mention that it \
+repeats across years.
+
+If, after actually checking the attached exams, NONE of them contains a question that tests this \
+chapter's material, reply with exactly the marker {no_question_marker} and nothing else. Do not invent a \
+question that is not in the attached exams, and do not stretch an unrelated question to fit.
+
+Do not add a title heading - the surrounding document already provides one."""
 
 GLOSSARY_PROMPT = """Now produce the closing key-concepts glossary in Hebrew for this entire unit: a \
 bullet list of every bolded key concept you introduced across all the topics above, in the order they \
